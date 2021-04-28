@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ja">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+        <title>Google Authenticator Sample</title>
+        <script src="./dist/jquery.js"></script>
+        <script src="./dist/jquery.qrcode.js"></script>
+        <script>
+            function base32(ab) {
+                const base = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+                let b = 0;
+                let l = 0;
+                function __convert() {
+                    if (l < 5) return "";
+                    l = l - 5;
+                    u = b>>l;
+                    b = b & (Math.pow(2,l)-1);
+                    return base[u] + __convert();
+                }
+                function __add(c, len) {
+                    b = (b << len) + (c & (Math.pow(2,len)-1));
+                    l = l + len;
+                }
+                var result = "";
+                for (var uint of ab) {
+                    __add(uint, 8);
+                    r = __convert();
+                    result += r;
+                }
+                __add(0, 4);
+                result += __convert();
+                function __appendeq(s) {
+                    return s.length % 8 == 0 ? s : __appendeq(s+"=");
+                }
+                return __appendeq(result);
+            }
+            async function exportKey(key) {
+                secret = await window.crypto.subtle.exportKey("raw", key);
+                array = new Uint8Array(secret);
+                return base32(array);
+            }
+
+            async function hotp(key, counter) {
+                array = new Uint8Array(8);
+                array[0] = 0;
+                array[1] = 0;
+                array[2] = 0;
+                array[3] = 0;
+                array[4] = (counter & (127<<24))>>24;
+                array[5] = (counter & (255<<16))>>16;
+                array[6] = (counter & (255<<8))>>8;
+                array[7] = (counter & (255<<0))>>0;
+                hash = await window.crypto.subtle.sign({name: "HMAC", hash: {name: "SHA-1"}}, key, array);
+                hash = new Uint8Array(hash);
+                offset = hash[19] & 15;
+                p = ((hash[offset]&127)<<24) + ((hash[offset+1]&255)<<16) + ((hash[offset+2]&255)<<8) + (hash[offset+3]&255);
+                return p % Math.pow(10,6);
+            }
+            async function totp(key) {
+                unixtime = parseInt(new Date().getTime() / 1000);
+                counter = parseInt(unixtime / 30);
+                return await hotp(key, counter);
+            }
+
+            $(function() {
+                let timer = undefined;
+                // https://ja.wikipedia.org/wiki/Google_Authenticator
+                // 秘密鍵は80bitとのこと
+                let secret_key_array = window.crypto.getRandomValues(new Uint8Array(10));
+                $('#generate').on('click', function() {
+                    if (timer) clearInterval(timer);
+
+                    let secret = base32(secret_key_array);
+                    $('#secret').val(secret);
+                    let uri = "otpauth://totp/"+encodeURIComponent("GAuthSample:sample-user")
+                            + "?secret="+encodeURIComponent(secret)
+                            + "&issuer="+encodeURIComponent("GAuthSample")
+                            + "&algorithm=SHA1&digits=6&period=30";
+                    $('#uri').val(uri);
+                    $('#qrcode').children().remove();
+                    $('#qrcode').qrcode({width: 128, height: 128, text: uri});
+
+                    window.crypto.subtle.importKey("raw", secret_key_array, {name:"HMAC", hash: {name: "SHA-1"}}, true, ["sign"])
+                        .then((key) => {
+                            timer = setInterval(function() {
+                                totp(key).then((code) => {
+                                    $('#code').val(code);
+                                });
+                            }, 1000);
+                        });
+                });
+            });
+        </script>
+    </head>
+    <body>
+        <div>
+            <input type="text" id="secret"/>
+            <input type="text" id="uri"/>
+            <input type="text" id="code"/>
+            <button type="button" id="generate">生成</button>
+        </div>
+        <div id="qrcode"></div>
+    </body>
+</html>
+
+
+
